@@ -1,16 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  Pressable,
-  Image,
-  ScrollView,
-  Dimensions,
-  ActivityIndicator,
-  Share,
-  Alert,
-  FlatList,
+  View, Text, StyleSheet, Pressable, Image,
+  ScrollView, Dimensions, ActivityIndicator, Share, Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '@/src/providers/auth-provider';
@@ -28,842 +19,499 @@ interface Application {
   created_at?: string;
 }
 
+const { width, height } = Dimensions.get('window');
+
+const formatRefNumber = (id: string, prefix = 'APP') => {
+  if (!id) return `${prefix}-0000-00000`;
+  const year = new Date().getFullYear();
+  const num = parseInt(id.replace(/-/g, '').slice(0, 6), 16) % 99999;
+  return `${prefix}-${year}-${String(num).padStart(5, '0')}`;
+};
+
+const formatInstitutionalId = (firstName?: string, lastName?: string, seed?: string) => {
+  const initials = `${(firstName?.[0] || 'U').toUpperCase()}${(lastName?.[0] || 'U').toUpperCase()}`;
+  const year = new Date().getFullYear();
+  const num = seed ? (parseInt(seed.replace(/-/g, '').slice(0, 4), 16) % 9000) + 1000 : 8892;
+  return `${initials}-${year}-${num}`;
+};
+
 export function StatusScreen() {
   const router = useRouter();
   const { user, token, logout } = useAuth();
   const [applications, setApplications] = useState<Application[]>([]);
-  const [selectedApplication, setSelectedApplication] = useState<Application | null>(null);
+  const [selectedApp, setSelectedApp] = useState<Application | null>(null);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+
+  const institutionalId = formatInstitutionalId(
+    user?.profile?.first_name,
+    user?.profile?.last_name,
+    user?.id,
+  );
 
   useEffect(() => {
-    if (!user) {
-      router.replace('/login');
-      return;
-    }
-    fetchApplicationStatus();
+    if (!user) { router.replace('/login'); return; }
+    fetchStatus();
   }, [user, token]);
 
-  const fetchApplicationStatus = async () => {
+  const fetchStatus = async () => {
     try {
       setLoading(true);
       if (!token) return;
-
-      // Fetch both volunteer applications and donations
-      const [appResponse, donResponse] = await Promise.all([
-        fetch(`${API_BASE}/forms/my-applications`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-        }),
-        fetch(`${API_BASE}/forms/my-donations`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            'Content-Type': 'application/json',
-          },
-        }),
+      const [appRes, donRes] = await Promise.all([
+        fetch(`${API_BASE}/forms/my-applications`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${API_BASE}/forms/my-donations`, { headers: { Authorization: `Bearer ${token}` } }),
       ]);
-
-      if (appResponse.status === 401 || donResponse.status === 401) {
-        logout();
-        router.replace('/login');
-        return;
-      }
-
-      let allApplications: Application[] = [];
-
-      if (appResponse.ok) {
-        const appData = await appResponse.json();
-        if (appData.success && appData.data && Array.isArray(appData.data)) {
-          allApplications = [...allApplications, ...appData.data];
-        }
-      }
-
-      if (donResponse.ok) {
-        const donData = await donResponse.json();
-        if (donData.success && donData.data && Array.isArray(donData.data)) {
-          allApplications = [...allApplications, ...donData.data];
-        }
-      }
-
-      if (allApplications.length > 0) {
-        // Sort by created_at, most recent first
-        allApplications.sort((a, b) => {
-          const dateA = new Date(a.created_at || 0).getTime();
-          const dateB = new Date(b.created_at || 0).getTime();
-          return dateB - dateA;
-        });
-        setApplications(allApplications);
-        setSelectedApplication(allApplications[0]);
-      }
-    } catch (error) {
-      console.error('Error fetching applications:', error);
-      Alert.alert('Error', 'Failed to load application status');
+      if (appRes.status === 401 || donRes.status === 401) { logout(); router.replace('/login'); return; }
+      let all: Application[] = [];
+      if (appRes.ok) { const d = await appRes.json(); if (d.success && Array.isArray(d.data)) all = [...all, ...d.data]; }
+      if (donRes.ok) { const d = await donRes.json(); if (d.success && Array.isArray(d.data)) all = [...all, ...d.data]; }
+      all.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+      setApplications(all);
+      if (all.length > 0) setSelectedApp(all[0]);
+    } catch (e) {
+      console.error(e);
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
   };
 
-  const handleRefresh = () => {
-    setRefreshing(true);
-    fetchApplicationStatus();
+  const handleShare = async () => {
+    if (!selectedApp?.qr_code) { Alert.alert('No QR Code', 'Your application has not been approved yet.'); return; }
+    try { await Share.share({ message: `BayaniHub Digital Pass – ${selectedApp.event_name || 'BayaniHub Event'}`, url: selectedApp.qr_code }); }
+    catch (e) { console.error(e); }
   };
 
-  const handleSharePass = async () => {
-    if (!selectedApplication?.qr_code) {
-      Alert.alert('No QR Code', 'Your application has not been approved yet.');
-      return;
-    }
-
-    try {
-      await Share.share({
-        message: `Check out my BayaniHub Digital Pass! Event: ${selectedApplication.event_name || 'BayaniHub Event'}`,
-        url: selectedApplication.qr_code,
-        title: 'BayaniHub Digital Pass',
-      });
-    } catch (error) {
-      console.error('Error sharing:', error);
-    }
-  };
-
-  const handleDownloadQR = () => {
-    if (!selectedApplication?.qr_code) {
-      Alert.alert('No QR Code', 'Your application has not been approved yet.');
-      return;
-    }
-    Alert.alert('QR Code', 'QR code image downloaded to your device.');
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'approved':
-        return { bg: '#D1FAE5', text: '#059669', icon: '✓' };
-      case 'under_review':
-      case 'submitted':
-        return { bg: '#FEF3C7', text: '#B45309', icon: '⏳' };
-      case 'rejected':
-        return { bg: '#FEE2E2', text: '#DC2626', icon: '✕' };
-      default:
-        return { bg: '#E5E7EB', text: '#374151', icon: '?' };
-    }
-  };
-
-  const getStatusTitle = (status: string) => {
-    switch (status) {
-      case 'approved':
-        return 'Application Approved!';
-      case 'under_review':
-      case 'submitted':
-        return 'Your Application is Under Review';
-      case 'rejected':
-        return 'Application Not Approved';
-      case 'pending':
-        return 'Donation Pending';
-      default:
-        return 'Application Status Unknown';
-    }
-  };
-
-  const getStatusMessage = (status: string) => {
-    switch (status) {
-      case 'approved':
-        return 'Your event pass is ready to use.';
-      case 'under_review':
-      case 'submitted':
-        return 'Institutional reviews typically take 3-5 business days. You will be notified via SMS.';
-      case 'rejected':
-        return 'Unfortunately, your application was not accepted. Please review guidelines or contact support.';
-      case 'pending':
-        return 'Your donation is being reviewed and prepared for delivery.';
-      default:
-        return 'Unable to determine application status.';
-    }
-  };
-
-  const statusColor = selectedApplication ? getStatusColor(selectedApplication.status) : getStatusColor('unknown');
-
-  return (
-    <ScrollView style={styles.container} contentContainerStyle={{ flexGrow: 1 }}>
-      {/* NAVIGATION BAR */}
-      <View style={styles.navBar}>
-        <Pressable onPress={() => router.back()} style={({ pressed }) => [styles.backButton, pressed && { opacity: 0.5 }]}>
-          <Text style={styles.backIcon}>←</Text>
-        </Pressable>
-        <Text style={styles.navTitle}>Status</Text>
-        <View style={{ width: 40 }} />
+  const renderHeader = () => (
+    <View style={s.header}>
+      <Pressable onPress={() => router.back()} style={s.headerBack}>
+        <Text style={s.headerBackIcon}>←</Text>
+      </Pressable>
+      <Text style={s.headerTitle}>BayaniHub</Text>
+      <View style={s.avatarCircle}>
+        <Text style={s.avatarText}>{(user?.profile?.first_name?.[0] || 'U').toUpperCase()}</Text>
       </View>
+    </View>
+  );
 
-      {/* WELCOME SECTION */}
-      <View style={styles.welcomeSection}>
-        <Text style={styles.welcomeLabel}>WELCOME BACK</Text>
-        <Text style={styles.userName}>
-          {user?.profile?.first_name} {user?.profile?.last_name}
-        </Text>
-      </View>
+  const renderBottomNav = () => (
+    <View style={s.bottomNav}>
+      <Pressable style={s.navItem} onPress={() => router.push('/dashboard' as any)}>
+        <Text style={s.navIcon}>⊞</Text>
+        <Text style={s.navLabel}>Dashboard</Text>
+      </Pressable>
+      <Pressable style={[s.navItem, s.navItemActive]}>
+        <Text style={[s.navIcon, s.navIconActive]}>📋</Text>
+        <Text style={[s.navLabel, s.navLabelActive]}>Applications</Text>
+      </Pressable>
+      <Pressable style={s.navItem}>
+        <Text style={s.navIcon}>📄</Text>
+        <Text style={s.navLabel}>Documents</Text>
+      </Pressable>
+    </View>
+  );
 
-      {/* LOADING STATE */}
-      {loading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color="#3B71CA" />
-          <Text style={styles.loadingText}>Loading your application status...</Text>
+
+  // ── UNDER REVIEW ──
+  const renderUnderReview = (app: Application) => {
+    const ref = formatRefNumber(app.id);
+    return (
+      <ScrollView style={s.container} showsVerticalScrollIndicator={false}>
+        {renderHeader()}
+        <View style={s.welcomeSection}>
+          <Text style={s.welcomeLabel}>WELCOME BACK</Text>
+          <Text style={s.welcomeName}>{user?.profile?.first_name} {user?.profile?.last_name}</Text>
         </View>
-      ) : applications.length > 0 && selectedApplication ? (
-        <>
-          {/* STATUS CARD */}
-          <View style={[styles.statusCard, { borderTopColor: statusColor.text }]}>
-            <View style={[styles.statusIconContainer, { backgroundColor: statusColor.bg }]}>
-              <Text style={[styles.statusIcon, { color: statusColor.text }]}>
-                {statusColor.icon}
-              </Text>
-            </View>
-            <Text style={styles.statusTitle}>{getStatusTitle(selectedApplication.status)}</Text>
-            <Text style={styles.statusMessage}>{getStatusMessage(selectedApplication.status)}</Text>
+
+        {/* Institutional ID Card */}
+        <View style={s.idCard}>
+          <View style={s.idCardTop}>
+            <Text style={s.idCardLabel}>INSTITUTIONAL ID</Text>
+            <View style={s.idCardVerifiedBadge}><Text style={s.idCardVerifiedText}>✓</Text></View>
           </View>
-
-          {/* EVENT DETAILS (if approved) */}
-          {selectedApplication.status === 'approved' && (
-            <View style={styles.eventCard}>
-              <Text style={styles.eventLabel}>EVENT PASS</Text>
-              <Text style={styles.eventName}>{selectedApplication.event_name || 'BayaniHub Event'}</Text>
-              {selectedApplication.event_date && (
-                <View style={styles.eventInfoRow}>
-                  <Text style={styles.eventInfoLabel}>DATE</Text>
-                  <Text style={styles.eventInfoValue}>{selectedApplication.event_date}</Text>
-                </View>
-              )}
-              {selectedApplication.role && (
-                <View style={styles.eventInfoRow}>
-                  <Text style={styles.eventInfoLabel}>ROLE</Text>
-                  <Text style={styles.eventInfoValue}>{selectedApplication.role}</Text>
-                </View>
-              )}
-            </View>
-          )}
-
-          {/* QR CODE SECTION (if approved) */}
-          {selectedApplication.status === 'approved' && selectedApplication.qr_code && (
-            <View style={styles.qrContainer}>
-              <View style={styles.qrBox}>
-                <Image
-                  source={{ uri: selectedApplication.qr_code }}
-                  style={styles.qrImage}
-                  resizeMode="contain"
-                />
-                <Text style={styles.qrHint}>Scan at the entrance kiosk</Text>
-              </View>
-
-              <View style={styles.actionButtonsContainer}>
-                <Pressable
-                  style={({ pressed }) => [styles.actionButton, styles.downloadButton, pressed && { opacity: 0.7 }]}
-                  onPress={handleDownloadQR}
-                >
-                  <Text style={styles.downloadIcon}>⬇️</Text>
-                  <Text style={styles.actionButtonText}>Save QR Code</Text>
-                </Pressable>
-
-                <Pressable
-                  style={({ pressed }) => [styles.actionButton, styles.shareButton, pressed && { opacity: 0.7 }]}
-                  onPress={handleSharePass}
-                >
-                  <Text style={styles.shareIcon}>📤</Text>
-                  <Text style={styles.actionButtonText}>Share Pass</Text>
-                </Pressable>
-              </View>
-            </View>
-          )}
-
-          {/* NOT APPROVED MESSAGE */}
-          {selectedApplication.status === 'rejected' && (
-            <View style={styles.notApprovedContainer}>
-              <View style={styles.notApprovedIcon}>
-                <Text style={styles.notApprovedX}>✕</Text>
-              </View>
-              <Text style={styles.notApprovedTitle}>Application Not Approved</Text>
-              <Text style={styles.notApprovedMessage}>
-                Unfortunately, your application was not accepted. Please review the guidelines.
-              </Text>
-              <Pressable
-                style={({ pressed }) => [styles.supportButton, pressed && { opacity: 0.7 }]}
-                onPress={() => Alert.alert('Support', 'Contact support team for assistance.')}
-              >
-                <Text style={styles.supportButtonText}>Contact Support</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [styles.guidelinesButton, pressed && { opacity: 0.7 }]}
-                onPress={() => router.push('/about' as any)}
-              >
-                <Text style={styles.guidelinesButtonText}>Review Guidelines</Text>
-              </Pressable>
-            </View>
-          )}
-
-          {/* APPLICATIONS LIST */}
-          {applications.length > 1 && (
-            <View style={styles.applicationsSection}>
-              <Text style={styles.applicationsSectionTitle}>Your Applications</Text>
-              <FlatList
-                data={applications}
-                scrollEnabled={false}
-                keyExtractor={(item) => item.id}
-                renderItem={({ item }) => (
-                  <Pressable
-                    style={[
-                      styles.applicationItem,
-                      selectedApplication.id === item.id && styles.applicationItemSelected,
-                    ]}
-                    onPress={() => setSelectedApplication(item)}
-                  >
-                    <View style={styles.appItemContent}>
-                      <Text style={styles.appItemTitle}>{item.event_name || item.role}</Text>
-                      <Text style={styles.appItemDate}>{item.event_date}</Text>
-                    </View>
-                    <View
-                      style={[
-                        styles.appItemStatusBadge,
-                        { backgroundColor: getStatusColor(item.status).bg },
-                      ]}
-                    >
-                      <Text style={{ color: getStatusColor(item.status).text, fontWeight: '600', fontSize: 11 }}>
-                        {item.status.replace('_', ' ').toUpperCase()}
-                      </Text>
-                    </View>
-                  </Pressable>
-                )}
-              />
-            </View>
-          )}
-
-          {/* ADDITIONAL INFO */}
-          <View style={styles.infoSection}>
-            <View style={styles.infoCard}>
-              <Text style={styles.infoIcon}>📄</Text>
-              <Text style={styles.infoLabel}>Applications</Text>
-              <Text style={styles.infoValue}>{applications.length}</Text>
-            </View>
-            <View style={styles.infoCard}>
-              <Text style={styles.infoIcon}>📅</Text>
-              <Text style={styles.infoLabel}>Submitted</Text>
-              <Text style={styles.infoValue}>Recently</Text>
-            </View>
-            <View style={styles.infoCard}>
-              <Text style={styles.infoIcon}>📋</Text>
-              <Text style={styles.infoLabel}>Status</Text>
-              <Text style={styles.infoValue}>Active</Text>
+          <Text style={s.idCardNumber}>{institutionalId}</Text>
+          <View style={s.idCardUserRow}>
+            <View style={s.idCardDocIcon}><Text style={{ fontSize: 18 }}>📄</Text></View>
+            <View>
+              <Text style={s.idCardUserName}>{user?.profile?.first_name} {user?.profile?.last_name}</Text>
+              <Text style={s.idCardUserRole}>Senior Citizen / Resident</Text>
             </View>
           </View>
+        </View>
 
-          {/* REFRESH AND LOGOUT */}
-          <View style={styles.bottomButtons}>
-            <Pressable
-              style={({ pressed }) => [styles.secondaryButton, pressed && { opacity: 0.7 }]}
-              onPress={handleRefresh}
-            >
-              <Text style={styles.secondaryButtonText}>
-                {refreshing ? 'Refreshing...' : 'Refresh Status'}
-              </Text>
-            </Pressable>
-            <Pressable
-              style={({ pressed }) => [styles.logoutButton, pressed && { opacity: 0.7 }]}
-              onPress={() => {
-                logout();
-                router.replace('/login');
-              }}
-            >
-              <Text style={styles.logoutButtonText}>Logout</Text>
-            </Pressable>
+        {/* Review Status Card */}
+        <View style={s.card}>
+          <View style={s.reviewHeader}>
+            <View style={s.reviewIconBox}><Text style={{ fontSize: 20 }}>⏳</Text></View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.reviewTitle}>Your Application is Under Review</Text>
+              <Text style={s.reviewRef}>Ref: {ref}</Text>
+            </View>
           </View>
-        </>
-      ) : (
-        /* NO APPLICATION */
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyTitle}>No Applications Yet</Text>
-          <Text style={styles.emptyMessage}>
-            You haven't submitted any applications or pledges yet.
-          </Text>
-          <Pressable
-            style={({ pressed }) => [styles.emptyButton, pressed && { opacity: 0.7 }]}
-            onPress={() => router.push('/volunteer' as any)}
-          >
-            <Text style={styles.emptyButtonText}>Submit Application</Text>
+          <View style={s.progressSection}>
+            <View style={s.progressLabelRow}>
+              <Text style={s.progressStage}>STAGE 2 OF 3</Text>
+              <Text style={s.progressPercent}>66% Completed</Text>
+            </View>
+            <View style={s.progressBg}><View style={[s.progressFill, { width: '66%' }]} /></View>
+            <Text style={s.progressNext}>Next step: Verification of Documents</Text>
+          </View>
+          <Pressable style={s.primaryBtn}>
+            <Text style={s.primaryBtnText}>View Submission Details</Text>
+          </Pressable>
+          <Pressable style={s.outlineBtn} onPress={() => Alert.alert('Support', 'Contact support team for assistance.')}>
+            <Text style={s.outlineBtnIcon}>💬</Text>
+            <Text style={s.outlineBtnText}>Contact Support</Text>
           </Pressable>
         </View>
-      )}
+
+        {/* Stats */}
+        <View style={s.statsRow}>
+          <View style={s.statCard}>
+            <Text style={s.statIcon}>📄</Text>
+            <Text style={s.statTitle}>Documents</Text>
+            <Text style={s.statValue}>4 Attached</Text>
+          </View>
+          <View style={s.statCard}>
+            <Text style={s.statIcon}>🔔</Text>
+            <Text style={s.statTitle}>Updates</Text>
+            <Text style={s.statValue}>Last: 2h ago</Text>
+          </View>
+        </View>
+
+        <View style={s.infoBox}>
+          <Text style={s.infoBoxIcon}>ℹ️</Text>
+          <Text style={s.infoBoxText}>Institutional reviews typically take 3-5 business days. You will be notified via SMS.</Text>
+        </View>
+        <View style={{ height: 90 }} />
+      </ScrollView>
+    );
+  };
+
+  // ── APPROVED ──
+  const renderApproved = (app: Application) => {
+    const passId = `BH-${new Date().getFullYear()}-${String(parseInt(app.id.slice(0, 5), 16) % 99999).padStart(5, '0')}`;
+    return (
+      <ScrollView style={s.container} showsVerticalScrollIndicator={false}>
+        {renderHeader()}
+
+        <View style={s.approvedHero}>
+          <View style={s.approvedCircle}><Text style={s.approvedCheck}>✓</Text></View>
+          <Text style={s.approvedTitle}>Application Approved!</Text>
+          <Text style={s.approvedSub}>Your event pass is ready to use.</Text>
+        </View>
+
+        {/* Event Pass Card */}
+        <View style={s.eventPass}>
+          <View style={s.eventPassTop}>
+            <Text style={s.eventPassLabel}>EVENT PASS</Text>
+            <Text style={{ fontSize: 16 }}>🛡️</Text>
+          </View>
+          <Text style={s.eventPassName}>{app.event_name || 'BayaniHub Event'}</Text>
+          <View style={s.eventPassDetails}>
+            <View>
+              <Text style={s.eventPassDetailLabel}>DATE</Text>
+              <Text style={s.eventPassDetailValue}>{app.event_date || 'TBD'}</Text>
+            </View>
+            <View>
+              <Text style={s.eventPassDetailLabel}>SEAT</Text>
+              <Text style={s.eventPassDetailValue}>{app.role || 'Volunteer'}</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* QR Code */}
+        <View style={s.qrBox}>
+          {app.qr_code ? (
+            <Image source={{ uri: app.qr_code }} style={s.qrImage} resizeMode="contain" />
+          ) : (
+            <View style={s.qrPlaceholder}><Text style={s.qrPlaceholderText}>QR</Text></View>
+          )}
+          <Text style={s.qrHint}>Scan at the entrance kiosk</Text>
+          <Text style={s.qrPassId}>PASS ID: {passId}</Text>
+        </View>
+
+        <View style={s.actionButtons}>
+          <Pressable style={s.primaryBtn} onPress={() => Alert.alert('QR Code', 'QR code saved to your device.')}>
+            <Text style={s.primaryBtnText}>⬇  Save QR Code</Text>
+          </Pressable>
+          <Pressable style={s.outlineBtn} onPress={handleShare}>
+            <Text style={s.outlineBtnText}>⬆  Share Pass</Text>
+          </Pressable>
+        </View>
+
+        <View style={s.infoBox}>
+          <Text style={s.infoBoxIcon}>ℹ️</Text>
+          <Text style={s.infoBoxText}>Please present this digital pass along with a valid photo ID at the event venue for verification.</Text>
+        </View>
+        <View style={{ height: 90 }} />
+      </ScrollView>
+    );
+  };
+
+  // ── REJECTED ──
+  const renderRejected = (app: Application) => {
+    const appId = formatRefNumber(app.id, 'BH');
+    return (
+      <ScrollView style={s.container} showsVerticalScrollIndicator={false}>
+        {renderHeader()}
+
+        <View style={s.rejectedHero}>
+          <View style={s.rejectedCircle}><Text style={s.rejectedX}>✕</Text></View>
+          <Text style={s.rejectedTitle}>Application Not Approved</Text>
+          <Text style={s.rejectedSub}>Unfortunately, your application was not accepted. Please contact support or re-apply.</Text>
+        </View>
+
+        <View style={s.actionButtons}>
+          <Pressable style={s.primaryBtn} onPress={() => Alert.alert('Support', 'Contact support team for assistance.')}>
+            <Text style={s.primaryBtnText}>Contact Support</Text>
+          </Pressable>
+          <Pressable style={s.outlineBtn} onPress={() => router.push('/about' as any)}>
+            <Text style={s.outlineBtnText}>Review Guidelines</Text>
+          </Pressable>
+        </View>
+
+        <View style={s.infoBox}>
+          <Text style={s.infoBoxIcon}>ℹ️</Text>
+          <Text style={s.infoBoxText}>Please present this digital pass along with a valid photo ID at the event venue for verification.</Text>
+        </View>
+
+        <View style={s.appIdCard}>
+          <View>
+            <Text style={s.appIdLabel}>APPLICATION ID</Text>
+            <Text style={s.appIdValue}>{appId}</Text>
+          </View>
+          <View style={s.appIdQr}><Text style={{ fontSize: 22, color: '#1E3A8A' }}>⊞</Text></View>
+        </View>
+        <View style={{ height: 90 }} />
+      </ScrollView>
+    );
+  };
+
+  // ── EMPTY ──
+  const renderEmpty = () => (
+    <ScrollView style={s.container} showsVerticalScrollIndicator={false}>
+      {renderHeader()}
+      <View style={s.emptyContainer}>
+        <Text style={{ fontSize: 64, marginBottom: 16 }}>📋</Text>
+        <Text style={s.rejectedTitle}>No Applications Yet</Text>
+        <Text style={s.rejectedSub}>You haven't submitted any applications or pledges yet.</Text>
+        <Pressable style={[s.primaryBtn, { marginTop: 20, width: '80%' }]} onPress={() => router.push('/volunteer' as any)}>
+          <Text style={s.primaryBtnText}>Submit Application</Text>
+        </Pressable>
+      </View>
     </ScrollView>
+  );
+
+  if (loading) {
+    return (
+      <View style={[s.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#1E3A8A" />
+        <Text style={{ marginTop: 12, color: '#6B7280', fontSize: 14 }}>Loading your status...</Text>
+      </View>
+    );
+  }
+
+  const renderBody = () => {
+    if (!selectedApp) return renderEmpty();
+    const st = selectedApp.status;
+    if (st === 'approved') return renderApproved(selectedApp);
+    if (st === 'rejected') return renderRejected(selectedApp);
+    return renderUnderReview(selectedApp);
+  };
+
+  return (
+    <View style={{ flex: 1, backgroundColor: '#F3F4F6' }}>
+      {renderBody()}
+      {renderBottomNav()}
+    </View>
   );
 }
 
-const { height } = Dimensions.get('window');
+const NAVY = '#1E3A8A';
+const NAVY_LIGHT = '#2563EB';
+const GREEN = '#16A34A';
+const RED = '#DC2626';
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
+const s = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#F3F4F6' },
+
+  // Header
+  header: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingTop: 50, paddingBottom: 16,
+    backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#E5E7EB',
+  },
+  headerBack: { width: 36, height: 36, justifyContent: 'center' },
+  headerBackIcon: { fontSize: 22, color: '#111827', fontWeight: 'bold' },
+  headerTitle: { fontSize: 18, fontWeight: '700', color: NAVY },
+  avatarCircle: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: NAVY, justifyContent: 'center', alignItems: 'center',
+  },
+  avatarText: { color: '#FFF', fontWeight: '700', fontSize: 14 },
+
+  // Welcome
+  welcomeSection: { paddingHorizontal: 20, paddingTop: 24, paddingBottom: 8 },
+  welcomeLabel: { fontSize: 11, fontWeight: '600', color: NAVY_LIGHT, letterSpacing: 1, marginBottom: 4 },
+  welcomeName: { fontSize: 26, fontWeight: '800', color: '#111827' },
+
+  // ID Card
+  idCard: {
+    marginHorizontal: 20, marginTop: 16, borderRadius: 16,
+    backgroundColor: NAVY, padding: 20,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 5,
+  },
+  idCardTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  idCardLabel: { fontSize: 11, fontWeight: '600', color: 'rgba(255,255,255,0.7)', letterSpacing: 1 },
+  idCardVerifiedBadge: {
+    width: 22, height: 22, borderRadius: 11,
+    backgroundColor: 'rgba(255,255,255,0.2)', justifyContent: 'center', alignItems: 'center',
+  },
+  idCardVerifiedText: { color: '#FFF', fontSize: 12, fontWeight: '700' },
+  idCardNumber: { fontSize: 22, fontWeight: '800', color: '#FFFFFF', letterSpacing: 1, marginBottom: 14 },
+  idCardUserRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  idCardDocIcon: {
+    width: 38, height: 38, borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.15)', justifyContent: 'center', alignItems: 'center',
+  },
+  idCardUserName: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+  idCardUserRole: { fontSize: 12, color: 'rgba(255,255,255,0.65)', marginTop: 2 },
+
+  // Generic Card
+  card: {
+    marginHorizontal: 20, marginTop: 16, borderRadius: 16, backgroundColor: '#FFFFFF',
+    padding: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 6, elevation: 3,
   },
 
-  navBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 20,
-    height: 70,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5E7EB',
-    paddingTop: 20,
+  // Review
+  reviewHeader: { flexDirection: 'row', gap: 12, alignItems: 'flex-start', marginBottom: 16 },
+  reviewIconBox: {
+    width: 42, height: 42, borderRadius: 21,
+    backgroundColor: '#FEF3C7', justifyContent: 'center', alignItems: 'center',
   },
+  reviewTitle: { fontSize: 16, fontWeight: '700', color: '#111827', marginBottom: 4 },
+  reviewRef: { fontSize: 12, color: '#6B7280' },
 
-  backButton: {
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
+  // Progress
+  progressSection: { marginBottom: 16 },
+  progressLabelRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
+  progressStage: { fontSize: 11, fontWeight: '700', color: NAVY, letterSpacing: 0.5 },
+  progressPercent: { fontSize: 11, fontWeight: '600', color: '#6B7280' },
+  progressBg: { height: 8, borderRadius: 4, backgroundColor: '#E5E7EB', overflow: 'hidden' },
+  progressFill: { height: '100%', borderRadius: 4, backgroundColor: NAVY },
+  progressNext: { fontSize: 11, color: '#6B7280', marginTop: 8 },
+
+  // Buttons
+  primaryBtn: {
+    backgroundColor: NAVY, borderRadius: 10, paddingVertical: 14,
+    alignItems: 'center', justifyContent: 'center', marginBottom: 10,
   },
-
-  backIcon: {
-    fontSize: 24,
-    color: '#111827',
-    fontWeight: 'bold',
+  primaryBtnText: { color: '#FFF', fontSize: 15, fontWeight: '700' },
+  outlineBtn: {
+    borderWidth: 1.5, borderColor: NAVY, borderRadius: 10, paddingVertical: 13,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 8,
   },
+  outlineBtnIcon: { fontSize: 14 },
+  outlineBtnText: { color: NAVY, fontSize: 15, fontWeight: '700' },
 
-  navTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#111827',
+  // Stats
+  statsRow: { flexDirection: 'row', gap: 8, marginHorizontal: 20, marginTop: 10 },
+  statCard: {
+    flex: 1, borderRadius: 10, backgroundColor: '#FFFFFF', padding: 10,
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 3, elevation: 1,
   },
+  statIcon: { fontSize: 16 },
+  statTitle: { fontSize: 10, color: '#6B7280', fontWeight: '600' },
+  statValue: { fontSize: 11, fontWeight: '700', color: '#374151' },
 
-  welcomeSection: {
-    paddingHorizontal: 20,
-    paddingVertical: 30,
-    backgroundColor: '#F9FAFB',
+  // Info Box
+  infoBox: {
+    marginHorizontal: 20, marginTop: 10, borderRadius: 8,
+    backgroundColor: '#F8FAFF', padding: 10, flexDirection: 'row', gap: 6, alignItems: 'flex-start',
+    borderWidth: 1, borderColor: '#E5E7EB',
   },
+  infoBoxIcon: { fontSize: 12, marginTop: 1 },
+  infoBoxText: { flex: 1, fontSize: 11, color: '#6B7280', lineHeight: 16 },
 
-  welcomeLabel: {
-    fontSize: 12,
-    color: '#6B7280',
-    fontWeight: '500',
-    marginBottom: 5,
-    letterSpacing: 0.5,
+  // Approved
+  approvedHero: { alignItems: 'center', paddingTop: 32, paddingBottom: 24, paddingHorizontal: 20 },
+  approvedCircle: {
+    width: 80, height: 80, borderRadius: 40,
+    backgroundColor: '#DCFCE7', justifyContent: 'center', alignItems: 'center', marginBottom: 16,
   },
+  approvedCheck: { fontSize: 38, color: GREEN, fontWeight: '900' },
+  approvedTitle: { fontSize: 24, fontWeight: '800', color: '#111827', marginBottom: 6 },
+  approvedSub: { fontSize: 14, color: '#6B7280', textAlign: 'center' },
 
-  userName: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#111827',
+  // Event Pass
+  eventPass: {
+    marginHorizontal: 20, borderRadius: 16, backgroundColor: NAVY, padding: 22,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 8, elevation: 5,
   },
+  eventPassTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  eventPassLabel: { fontSize: 11, fontWeight: '700', color: 'rgba(255,255,255,0.65)', letterSpacing: 1 },
+  eventPassName: { fontSize: 22, fontWeight: '800', color: '#FFFFFF', marginBottom: 16 },
+  eventPassDetails: { flexDirection: 'row', gap: 40 },
+  eventPassDetailLabel: { fontSize: 10, fontWeight: '700', color: 'rgba(255,255,255,0.55)', letterSpacing: 1, marginBottom: 4 },
+  eventPassDetailValue: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
 
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    minHeight: height - 300,
-  },
-
-  loadingText: {
-    marginTop: 15,
-    fontSize: 14,
-    color: '#6B7280',
-  },
-
-  statusCard: {
-    marginHorizontal: 20,
-    marginTop: 30,
-    borderTopWidth: 4,
-    borderRadius: 8,
-    backgroundColor: '#FFFFFF',
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 3,
-  },
-
-  statusIconContainer: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 15,
-    alignSelf: 'center',
-  },
-
-  statusIcon: {
-    fontSize: 28,
-    fontWeight: 'bold',
-  },
-
-  statusTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#111827',
-    textAlign: 'center',
-    marginBottom: 10,
-  },
-
-  statusMessage: {
-    fontSize: 14,
-    color: '#6B7280',
-    textAlign: 'center',
-    lineHeight: 20,
-  },
-
-  eventCard: {
-    marginHorizontal: 20,
-    marginTop: 20,
-    borderRadius: 8,
-    backgroundColor: '#EFF6FF',
-    padding: 20,
-  },
-
-  eventLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#3B71CA',
-    letterSpacing: 0.5,
-    marginBottom: 8,
-  },
-
-  eventName: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#1E40AF',
-    marginBottom: 15,
-  },
-
-  eventInfoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 10,
-  },
-
-  eventInfoLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#3B71CA',
-    flex: 1,
-  },
-
-  eventInfoValue: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1E40AF',
-    flex: 1,
-    textAlign: 'right',
-  },
-
-  qrContainer: {
-    marginHorizontal: 20,
-    marginTop: 20,
-    alignItems: 'center',
-  },
-
+  // QR
   qrBox: {
-    width: 220,
-    height: 220,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: '#E5E7EB',
-    padding: 10,
-    backgroundColor: '#F9FAFB',
-    justifyContent: 'center',
-    alignItems: 'center',
+    marginHorizontal: 20, marginTop: 20, alignItems: 'center',
+    backgroundColor: '#FFFFFF', borderRadius: 16, padding: 24,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.07, shadowRadius: 6, elevation: 3,
+  },
+  qrImage: { width: 200, height: 200, borderRadius: 8 },
+  qrPlaceholder: {
+    width: 200, height: 200, borderRadius: 8,
+    backgroundColor: '#F3F4F6', justifyContent: 'center', alignItems: 'center',
+    borderWidth: 2, borderColor: '#E5E7EB', borderStyle: 'dashed',
+  },
+  qrPlaceholderText: { fontSize: 32, color: '#9CA3AF' },
+  qrHint: { marginTop: 14, fontSize: 12, color: '#6B7280' },
+  qrPassId: { marginTop: 6, fontSize: 12, fontWeight: '700', color: NAVY, letterSpacing: 0.5 },
+
+  actionButtons: { marginHorizontal: 20, marginTop: 16 },
+
+  // Rejected
+  rejectedHero: { alignItems: 'center', paddingTop: 32, paddingBottom: 24, paddingHorizontal: 24 },
+  rejectedCircle: {
+    width: 80, height: 80, borderRadius: 40,
+    backgroundColor: '#FEE2E2', justifyContent: 'center', alignItems: 'center', marginBottom: 16,
+  },
+  rejectedX: { fontSize: 36, color: RED, fontWeight: '900' },
+  rejectedTitle: { fontSize: 22, fontWeight: '800', color: '#111827', marginBottom: 8, textAlign: 'center' },
+  rejectedSub: { fontSize: 14, color: '#6B7280', textAlign: 'center', lineHeight: 20 },
+
+  // App ID Card
+  appIdCard: {
+    marginHorizontal: 20, marginTop: 16, borderRadius: 14, backgroundColor: '#FFFFFF',
+    padding: 18, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2,
+  },
+  appIdLabel: { fontSize: 11, fontWeight: '600', color: '#6B7280', letterSpacing: 0.5, marginBottom: 6 },
+  appIdValue: { fontSize: 18, fontWeight: '800', color: NAVY },
+  appIdQr: {
+    width: 44, height: 44, borderRadius: 10,
+    backgroundColor: '#EFF6FF', justifyContent: 'center', alignItems: 'center',
   },
 
-  qrImage: {
-    width: 200,
-    height: 200,
-  },
+  // Empty
+  emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24, minHeight: height - 200 },
 
-  qrHint: {
-    fontSize: 12,
-    color: '#6B7280',
-    marginTop: 10,
-    textAlign: 'center',
-  },
 
-  actionButtonsContainer: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 20,
-    width: '100%',
-    paddingHorizontal: 20,
+  // Bottom Nav
+  bottomNav: {
+    flexDirection: 'row', backgroundColor: '#FFFFFF',
+    borderTopWidth: 1, borderTopColor: '#E5E7EB',
+    paddingBottom: 20, paddingTop: 10,
+    position: 'absolute', bottom: 0, left: 0, right: 0,
   },
-
-  actionButton: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 8,
-  },
-
-  downloadButton: {
-    backgroundColor: '#3B71CA',
-    borderWidth: 1,
-    borderColor: '#3B71CA',
-  },
-
-  shareButton: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#3B71CA',
-  },
-
-  downloadIcon: {
-    fontSize: 16,
-  },
-
-  shareIcon: {
-    fontSize: 16,
-  },
-
-  actionButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#FFFFFF',
-  },
-
-  shareButton: {
-    borderWidth: 1,
-    borderColor: '#3B71CA',
-  },
-
-  notApprovedContainer: {
-    marginHorizontal: 20,
-    marginTop: 30,
-    alignItems: 'center',
-    padding: 20,
-  },
-
-  notApprovedIcon: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#FEE2E2',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-
-  notApprovedX: {
-    fontSize: 40,
-    color: '#DC2626',
-    fontWeight: 'bold',
-  },
-
-  notApprovedTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#111827',
-    marginBottom: 10,
-  },
-
-  notApprovedMessage: {
-    fontSize: 14,
-    color: '#6B7280',
-    textAlign: 'center',
-    marginBottom: 20,
-    lineHeight: 20,
-  },
-
-  supportButton: {
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 8,
-    backgroundColor: '#3B71CA',
-    marginBottom: 10,
-    width: '100%',
-  },
-
-  supportButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#FFFFFF',
-    textAlign: 'center',
-  },
-
-  guidelinesButton: {
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#3B71CA',
-    width: '100%',
-  },
-
-  guidelinesButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#3B71CA',
-    textAlign: 'center',
-  },
-
-  applicationsSection: {
-    marginHorizontal: 20,
-    marginTop: 30,
-  },
-
-  applicationsSectionTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#111827',
-    marginBottom: 12,
-  },
-
-  applicationItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    marginBottom: 8,
-    borderRadius: 8,
-    backgroundColor: '#F9FAFB',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
-
-  applicationItemSelected: {
-    backgroundColor: '#EFF6FF',
-    borderColor: '#3B71CA',
-  },
-
-  appItemContent: {
-    flex: 1,
-  },
-
-  appItemTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#111827',
-    marginBottom: 4,
-  },
-
-  appItemDate: {
-    fontSize: 11,
-    color: '#6B7280',
-  },
-
-  appItemStatusBadge: {
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 6,
-    marginLeft: 10,
-  },
-
-  infoSection: {
-    flexDirection: 'row',
-    marginHorizontal: 20,
-    marginTop: 30,
-    gap: 15,
-  },
-
-  infoCard: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 15,
-    borderRadius: 8,
-    backgroundColor: '#F9FAFB',
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-  },
-
-  infoIcon: {
-    fontSize: 24,
-    marginBottom: 5,
-  },
-
-  infoLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#6B7280',
-    marginBottom: 5,
-  },
-
-  infoValue: {
-    fontSize: 13,
-    fontWeight: 'bold',
-    color: '#111827',
-  },
-
-  bottomButtons: {
-    flexDirection: 'row',
-    gap: 10,
-    marginHorizontal: 20,
-    marginTop: 30,
-    marginBottom: 30,
-  },
-
-  secondaryButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    backgroundColor: '#FFFFFF',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  secondaryButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#111827',
-  },
-
-  logoutButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    backgroundColor: '#F3F4F6',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  logoutButtonText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#DC2626',
-  },
-
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-    minHeight: height - 200,
-  },
-
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#111827',
-    marginBottom: 10,
-  },
-
-  emptyMessage: {
-    fontSize: 14,
-    color: '#6B7280',
-    textAlign: 'center',
-    marginBottom: 30,
-  },
-
-  emptyButton: {
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 8,
-    backgroundColor: '#3B71CA',
-  },
-
-  emptyButtonText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#FFFFFF',
-  },
+  navItem: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4 },
+  navItemActive: {},
+  navIcon: { fontSize: 20, color: '#9CA3AF' },
+  navIconActive: { color: NAVY },
+  navLabel: { fontSize: 10, fontWeight: '600', color: '#9CA3AF' },
+  navLabelActive: { color: NAVY },
 });

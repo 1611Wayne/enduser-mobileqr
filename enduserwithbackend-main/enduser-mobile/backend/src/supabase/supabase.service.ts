@@ -119,7 +119,7 @@ export class SupabaseService implements OnModuleInit {
         role_id: roleId,
         volunteer_auth_id: volunteerAuthId,
         motivation: motivationStr,
-        skills: [data.role],
+        skills: data.role,
         availability: data.time_slot,
         resume_key: resumeKey,
         status: 'submitted'
@@ -130,24 +130,32 @@ export class SupabaseService implements OnModuleInit {
     return result;
   }
   async getVolunteerCampaigns() {
-    // Fetch open evacuation centers from Damayan DB
+    this.logger.log('[DEBUG] Fetching evacuation centers from Damayan DB...');
+    // Fetch evacuation centers from Damayan DB (all statuses for now)
     const { data: result, error } = await this.damayanClient
       .from('evacuation_centers')
-      .select('id, name, municipality, barangay, status, capacity, current_occupancy')
-      .eq('status', 'open');
+      .select('id, name, municipality, barangay, status, capacity, current_occupancy');
       
-    if (error) throw new Error(`Damayan DB Error: ${error.message}`);
+    if (error) {
+      this.logger.error(`[DEBUG] Damayan DB error: ${error.message}`);
+      throw new Error(`Damayan DB Error: ${error.message}`);
+    }
+    this.logger.log(`[DEBUG] Found ${result?.length ?? 0} evacuation center(s). Statuses: ${result?.map(r => r.status).join(', ')}`);
     return result;
   }
 
   async getActiveCampaigns() {
-    // Fetch ongoing relief operations from Damayan DB
+    this.logger.log('[DEBUG] Fetching relief operations from Damayan DB...');
+    // Fetch relief operations from Damayan DB (all statuses for now)
     const { data: result, error } = await this.damayanClient
       .from('relief_operations')
-      .select('id, name, description, status')
-      .eq('status', 'ongoing');
+      .select('id, name, description, status');
       
-    if (error) throw new Error(`Damayan DB Error: ${error.message}`);
+    if (error) {
+      this.logger.error(`[DEBUG] Damayan DB error: ${error.message}`);
+      throw new Error(`Damayan DB Error: ${error.message}`);
+    }
+    this.logger.log(`[DEBUG] Found ${result?.length ?? 0} relief operation(s). Statuses: ${result?.map(r => r.status).join(', ')}`);
     return result;
   }
 
@@ -178,34 +186,46 @@ export class SupabaseService implements OnModuleInit {
   }
 
   async getUserApplications(volunteerAuthId: string) {
+    this.logger.log(`[DEBUG] Fetching applications for user ID: ${volunteerAuthId}`);
+
     // Fetch volunteer applications for the authenticated user
+    // Note: the timestamp column is 'applied_at', not 'created_at'
     const { data: result, error } = await this.client
       .from('volunteer_applications')
-      .select('id, role_id, status, skills, availability, created_at')
+      .select('id, role_id, status, skills, availability, applied_at')
       .eq('volunteer_auth_id', volunteerAuthId)
-      .order('created_at', { ascending: false });
+      .order('applied_at', { ascending: false });
       
     if (error) throw new Error(`Supabase Error: ${error.message}`);
     
+    this.logger.log(`[DEBUG] Found ${result?.length ?? 0} application(s) for user ${volunteerAuthId}`);
+    if (result && result.length > 0) {
+      this.logger.log(`[DEBUG] First record: ${JSON.stringify(result[0])}`);
+    }
+
     // Map the results to include more readable status information
+    // Note: skills is a plain text column, not an array
     return result.map((app) => ({
       id: app.id,
-      role: app.skills?.[0] || 'Volunteer',
+      role: app.skills || 'Volunteer',
       status: app.status === 'submitted' ? 'under_review' : app.status,
       event_name: 'BayaniHub Event',
-      event_date: new Date(app.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+      event_date: new Date(app.applied_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
       application_id: app.id,
-      created_at: app.created_at,
+      created_at: app.applied_at,
     }));
   }
 
   async getUserDonations(donorAuthId: string) {
+    this.logger.log(`[DEBUG] Fetching donations for user ID: ${donorAuthId}`);
+
     // Fetch donations for the authenticated user
+    // Note: the timestamp column is 'donated_at', not 'created_at'
     const { data: result, error } = await this.client
       .from('donations')
-      .select('id, campaign_id, status, item_name, quantity, unit, created_at')
+      .select('id, campaign_id, status, item_name, quantity, unit, donated_at')
       .eq('donor_auth_id', donorAuthId)
-      .order('created_at', { ascending: false });
+      .order('donated_at', { ascending: false });
       
     if (error) throw new Error(`Supabase Error: ${error.message}`);
     
@@ -216,8 +236,8 @@ export class SupabaseService implements OnModuleInit {
       role: donation.item_name || 'Donation',
       status: donation.status,
       event_name: 'Goods Pledge',
-      event_date: new Date(donation.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-      created_at: donation.created_at,
+      event_date: new Date(donation.donated_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+      created_at: donation.donated_at,
     }));
   }
 }

@@ -1,23 +1,30 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Image, ScrollView, Dimensions, TouchableOpacity, Modal } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Image, ScrollView, Dimensions, TouchableOpacity, Modal, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from "@/src/providers/auth-provider";
 
 export function DashboardScreen() {
   const router = useRouter();
-  const { user, logout } = useAuth();
+  const { user, logout, isReady } = useAuth();
   const [showProfileMenu, setShowProfileMenu] = useState(false);
 
-  // Protect the route - only allow logged in users
+  // Protect the route — wait for auth to rehydrate from SecureStore first
   useEffect(() => {
-    if (!user) {
+    if (isReady && !user) {
       router.replace("/login");
     }
-  }, [router, user]);
+  }, [isReady, user, router]);
 
-  if (!user) {
-    return null;
+  // Show spinner while auth is loading
+  if (!isReady) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#fff' }}>
+        <ActivityIndicator size="large" color="#1E3A8A" />
+      </View>
+    );
   }
+
+  if (!user) return null;
 
   const handleLogout = () => {
     logout();
@@ -48,9 +55,6 @@ export function DashboardScreen() {
         </View>
 
         <View style={styles.navRight}>
-          <Pressable style={({ pressed }) => [styles.iconButton, pressed && { opacity: 0.5 }]} onPress={handleLogout}>
-            <Text style={{ fontSize: 13, color: '#DC2626', fontWeight: 'bold' }}>Logout</Text>
-          </Pressable>
           <Pressable style={({ pressed }) => [styles.userProfile, pressed && { opacity: 0.5 }]} onPress={() => setShowProfileMenu(true)}>
             <Image source={require('../../assets/icon-user.png')} style={styles.navIcon} resizeMode="contain" />
           </Pressable>
@@ -142,14 +146,14 @@ export function DashboardScreen() {
             </Pressable>
 
             <Pressable 
-              style={({ pressed }) => [styles.profileMenuItem, pressed && { backgroundColor: '#F3F4F6' }]}
+              style={({ pressed }) => [styles.profileMenuItem, pressed && { backgroundColor: '#FEF2F2' }]}
               onPress={() => {
                 setShowProfileMenu(false);
                 handleLogout();
               }}
             >
               <Text style={styles.profileMenuItemIcon}></Text>
-              <Text style={styles.profileMenuItemText}>Logout</Text>
+              <Text style={[styles.profileMenuItemText, { color: '#DC2626' }]}>Logout</Text>
             </Pressable>
           </View>
         </Pressable>
